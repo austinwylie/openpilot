@@ -1,5 +1,5 @@
 from enum import IntEnum
-from typing import Dict, Union, Callable, List, Optional
+from typing import Dict, Union, Callable
 
 from cereal import log, car
 import cereal.messaging as messaging
@@ -42,30 +42,33 @@ EVENT_NAME = {v: k for k, v in EventName.schema.enumerants.items()}
 
 class Events:
   def __init__(self):
-    self.events: List[int] = []
-    self.static_events: List[int] = []
+    self.events = []
+    self.static_events = []
     self.events_prev = dict.fromkeys(EVENTS.keys(), 0)
 
   @property
-  def names(self) -> List[int]:
+  def names(self):
     return self.events
 
-  def __len__(self) -> int:
+  def __len__(self):
     return len(self.events)
 
-  def add(self, event_name: int, static: bool=False) -> None:
+  def add(self, event_name, static=False):
     if static:
       self.static_events.append(event_name)
     self.events.append(event_name)
 
-  def clear(self) -> None:
+  def clear(self):
     self.events_prev = {k: (v + 1 if k in self.events else 0) for k, v in self.events_prev.items()}
     self.events = self.static_events.copy()
 
-  def any(self, event_type: str) -> bool:
-    return any(event_type in EVENTS.get(e, {}) for e in self.events)
+  def any(self, event_type):
+    for e in self.events:
+      if event_type in EVENTS.get(e, {}).keys():
+        return True
+    return False
 
-  def create_alerts(self, event_types: List[str], callback_args=None):
+  def create_alerts(self, event_types, callback_args=None):
     if callback_args is None:
       callback_args = []
 
@@ -126,7 +129,7 @@ class Alert:
     self.creation_delay = creation_delay
 
     self.alert_type = ""
-    self.event_type: Optional[str] = None
+    self.event_type = None
 
   def __str__(self) -> str:
     return f"{self.alert_text_1}/{self.alert_text_2} {self.priority} {self.visual_alert} {self.audible_alert}"
@@ -136,14 +139,14 @@ class Alert:
 
 
 class NoEntryAlert(Alert):
-  def __init__(self, alert_text_2: str, visual_alert: car.CarControl.HUDControl.VisualAlert=VisualAlert.none):
+  def __init__(self, alert_text_2, visual_alert=VisualAlert.none):
     super().__init__("openpilot Unavailable", alert_text_2, AlertStatus.normal,
                      AlertSize.mid, Priority.LOW, visual_alert,
                      AudibleAlert.refuse, 3.)
 
 
 class SoftDisableAlert(Alert):
-  def __init__(self, alert_text_2: str):
+  def __init__(self, alert_text_2):
     super().__init__("TAKE CONTROL IMMEDIATELY", alert_text_2,
                      AlertStatus.userPrompt, AlertSize.full,
                      Priority.MID, VisualAlert.steerRequired,
@@ -152,13 +155,13 @@ class SoftDisableAlert(Alert):
 
 # less harsh version of SoftDisable, where the condition is user-triggered
 class UserSoftDisableAlert(SoftDisableAlert):
-  def __init__(self, alert_text_2: str):
+  def __init__(self, alert_text_2):
     super().__init__(alert_text_2),
     self.alert_text_1 = "openpilot will disengage"
 
 
 class ImmediateDisableAlert(Alert):
-  def __init__(self, alert_text_2: str):
+  def __init__(self, alert_text_2):
     super().__init__("TAKE CONTROL IMMEDIATELY", alert_text_2,
                      AlertStatus.critical, AlertSize.full,
                      Priority.HIGHEST, VisualAlert.steerRequired,
@@ -236,7 +239,7 @@ def calibration_incomplete_alert(CP: car.CarParams, sm: messaging.SubMaster, met
 
 
 def no_gps_alert(CP: car.CarParams, sm: messaging.SubMaster, metric: bool, soft_disable_time: int) -> Alert:
-  gps_integrated = sm['peripheralState'].pandaType in (log.PandaState.PandaType.uno, log.PandaState.PandaType.dos)
+  gps_integrated = sm['peripheralState'].pandaType in [log.PandaState.PandaType.uno, log.PandaState.PandaType.dos]
   return Alert(
     "Poor GPS reception",
     "If sky is visible, contact support" if gps_integrated else "Check GPS antenna placement",
@@ -263,8 +266,6 @@ EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
   # ********** events with no alerts **********
 
   EventName.stockFcw: {},
-
-  EventName.lkasDisabled: {},
 
   # ********** events only containing alerts displayed in all states **********
 
@@ -489,12 +490,28 @@ EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
       Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
   },
 
+  EventName.manualSteeringRequired: {
+    ET.WARNING: Alert(
+      "Lane Keeping Assist is OFF",
+      "Manual Steering Required",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.disengage, 1., 2., 2.),
+  },
+
+  EventName.manualLongitudinalRequired: {
+    ET.WARNING: Alert(
+      "Adaptive Cruise Control is OFF",
+      "Manual Gas/Brakes Required",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, 1., 2., 2.),
+  },
+
   EventName.steerSaturated: {
     ET.WARNING: Alert(
       "Take Control",
       "Turn Exceeds Steering Limit",
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 1.),
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.none, 1., 1., 1.),
   },
 
   # Thrown when the fan is driven at >50% but is not rotating
@@ -529,6 +546,14 @@ EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
     ET.ENABLE: EngagementAlert(AudibleAlert.engage),
   },
 
+  EventName.silentButtonEnable: {
+    ET.ENABLE: Alert(
+      "",
+      "",
+      AlertStatus.normal, AlertSize.none,
+      Priority.MID, VisualAlert.none, AudibleAlert.none, .2, 0., 0.),
+  },
+
   EventName.pcmDisable: {
     ET.USER_DISABLE: EngagementAlert(AudibleAlert.disengage),
   },
@@ -542,6 +567,15 @@ EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
     ET.NO_ENTRY: NoEntryAlert("Brake Hold Active"),
   },
 
+  EventName.silentBrakeHold: {
+    ET.USER_DISABLE: Alert(
+      "",
+      "",
+      AlertStatus.normal, AlertSize.none,
+      Priority.MID, VisualAlert.none, AudibleAlert.none, .2, 0., 0.),
+    ET.NO_ENTRY: NoEntryAlert("Brake Hold Active"),
+  },
+
   EventName.parkBrake: {
     ET.USER_DISABLE: EngagementAlert(AudibleAlert.disengage),
     ET.NO_ENTRY: NoEntryAlert("Parking Brake Engaged"),
@@ -550,6 +584,16 @@ EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
   EventName.pedalPressed: {
     ET.USER_DISABLE: EngagementAlert(AudibleAlert.disengage),
     ET.NO_ENTRY: NoEntryAlert("Pedal Pressed",
+                              visual_alert=VisualAlert.brakePressed),
+  },
+
+  EventName.silentPedalPressed: {
+    ET.USER_DISABLE: Alert(
+      "",
+      "",
+      AlertStatus.normal, AlertSize.none,
+      Priority.MID, VisualAlert.none, AudibleAlert.none, .2, 0., 0.),
+    ET.NO_ENTRY: NoEntryAlert("Pedal Pressed During Attempt",
                               visual_alert=VisualAlert.brakePressed),
   },
 
@@ -608,6 +652,19 @@ EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
   EventName.wrongGear: {
     ET.SOFT_DISABLE: user_soft_disable_alert("Gear not D"),
     ET.NO_ENTRY: NoEntryAlert("Gear not D"),
+  },
+
+  EventName.silentWrongGear: {
+    ET.SOFT_DISABLE: Alert(
+      "Gear not D",
+      "openpilot Unavailable",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, 0., 2., 3.),
+    ET.NO_ENTRY: Alert(
+      "Gear not D",
+      "openpilot Unavailable",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, 0., 2., 3.),
   },
 
   # This alert is thrown when the calibration angles are outside of the acceptable range.

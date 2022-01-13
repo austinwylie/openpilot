@@ -1,12 +1,11 @@
-from abc import abstractmethod, ABC
+from abc import abstractmethod
 from collections import namedtuple
-from typing import Dict
 
 ThermalConfig = namedtuple('ThermalConfig', ['cpu', 'gpu', 'mem', 'bat', 'ambient', 'pmic'])
 
-class HardwareBase(ABC):
+class HardwareBase:
   @staticmethod
-  def get_cmdline() -> Dict[str, str]:
+  def get_cmdline():
     with open('/proc/cmdline') as f:
       cmdline = f.read()
     return {kv[0]: kv[1] for kv in [s.split('=') for s in cmdline.split(' ')] if len(kv) == 2}

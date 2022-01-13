@@ -7,7 +7,6 @@
 #include <QObject>
 #include <QTimer>
 #include <QColor>
-#include <QFuture>
 #include <QTransform>
 
 #include "cereal/messaging/messaging.h"
@@ -33,38 +32,29 @@ struct Alert {
   QString type;
   cereal::ControlsState::AlertSize size;
   AudibleAlert sound;
-
   bool equal(const Alert &a2) {
     return text1 == a2.text1 && text2 == a2.text2 && type == a2.type && sound == a2.sound;
   }
 
   static Alert get(const SubMaster &sm, uint64_t started_frame) {
-    const cereal::ControlsState::Reader &cs = sm["controlsState"].getControlsState();
     if (sm.updated("controlsState")) {
+      const cereal::ControlsState::Reader &cs = sm["controlsState"].getControlsState();
       return {cs.getAlertText1().cStr(), cs.getAlertText2().cStr(),
               cs.getAlertType().cStr(), cs.getAlertSize(),
               cs.getAlertSound()};
     } else if ((sm.frame - started_frame) > 5 * UI_FREQ) {
       const int CONTROLS_TIMEOUT = 5;
-      const int controls_missing = (nanos_since_boot() - sm.rcv_time("controlsState")) / 1e9;
-
       // Handle controls timeout
       if (sm.rcv_frame("controlsState") < started_frame) {
         // car is started, but controlsState hasn't been seen at all
         return {"openpilot Unavailable", "Waiting for controls to start",
                 "controlsWaiting", cereal::ControlsState::AlertSize::MID,
                 AudibleAlert::NONE};
-      } else if (controls_missing > CONTROLS_TIMEOUT) {
+      } else if ((nanos_since_boot() - sm.rcv_time("controlsState")) / 1e9 > CONTROLS_TIMEOUT) {
         // car is started, but controls is lagging or died
-        if (cs.getEnabled() && (controls_missing - CONTROLS_TIMEOUT) < 10) {
-          return {"TAKE CONTROL IMMEDIATELY", "Controls Unresponsive",
-                  "controlsUnresponsive", cereal::ControlsState::AlertSize::FULL,
-                  AudibleAlert::WARNING_IMMEDIATE};
-        } else {
-          return {"Controls Unresponsive", "Reboot Device",
-                  "controlsUnresponsivePermanent", cereal::ControlsState::AlertSize::MID,
-                  AudibleAlert::NONE};
-        }
+        return {"TAKE CONTROL IMMEDIATELY", "Controls Unresponsive",
+                "controlsUnresponsive", cereal::ControlsState::AlertSize::FULL,
+                AudibleAlert::WARNING_IMMEDIATE};
       }
     }
     return {};
@@ -92,6 +82,9 @@ typedef struct {
 
 typedef struct UIScene {
   mat3 view_from_calib;
+  bool world_objects_visible;
+
+  cereal::CarState::Reader car_state;
   cereal::PandaState::PandaType pandaType;
 
   // modelV2
@@ -105,20 +98,10 @@ typedef struct UIScene {
   QPointF lead_vertices[2];
 
   float light_sensor, accel_sensor, gyro_sensor;
-  bool started, ignition, is_metric, longitudinal_control, end_to_end;
+  bool started, ignition, is_metric, longitudinal_control, end_to_end, enabled, paused, lkasEnabled;
   uint64_t started_frame;
 } UIScene;
-
-class UIState : public QObject {
-  Q_OBJECT
-
-public:
-  UIState(QObject* parent = 0);
-  void updateStatus();
-  inline bool worldObjectsVisible() const { 
-    return sm->rcv_frame("liveCalibration") > scene.started_frame;
-  };
-
+typedef struct UIState {
   int fb_w = 0, fb_h = 0;
 
   std::unique_ptr<SubMaster> sm;
@@ -131,6 +114,17 @@ public:
 
   QTransform car_space_transform;
   bool wide_camera;
+} UIState;
+
+
+class QUIState : public QObject {
+  Q_OBJECT
+
+public:
+  QUIState(QObject* parent = 0);
+
+  // TODO: get rid of this, only use signal
+  inline static UIState ui_state = {0};
 
 signals:
   void uiUpdate(const UIState &s);
@@ -144,7 +138,6 @@ private:
   bool started_prev = true;
 };
 
-UIState *uiState();
 
 // device management class
 
@@ -159,23 +152,22 @@ private:
   const float accel_samples = 5*UI_FREQ;
 
   bool awake = false;
-  int interactive_timeout = 0;
-  bool ignition_on = false;
+  int awake_timeout = 0;
+  float accel_prev = 0;
+  float gyro_prev = 0;
   int last_brightness = 0;
   FirstOrderFilter brightness_filter;
-  QFuture<void> brightness_future;
+
+  QTimer *timer;
 
   void updateBrightness(const UIState &s);
   void updateWakefulness(const UIState &s);
-  bool motionTriggered(const UIState &s);
-  void setAwake(bool on);
 
 signals:
   void displayPowerChanged(bool on);
-  void interactiveTimout();
 
 public slots:
-  void resetInteractiveTimout();
+  void setAwake(bool on, bool reset);
   void update(const UIState &s);
 };
 

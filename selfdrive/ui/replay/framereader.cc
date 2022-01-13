@@ -3,8 +3,6 @@
 #include <cassert>
 #include "libyuv.h"
 
-#include "cereal/visionipc/visionbuf.h"
-
 namespace {
 
 struct buffer_data {
@@ -15,8 +13,7 @@ struct buffer_data {
 
 int readPacket(void *opaque, uint8_t *buf, int buf_size) {
   struct buffer_data *bd = (struct buffer_data *)opaque;
-  assert(bd->offset <= bd->size);
-  buf_size = std::min((size_t)buf_size, (size_t)(bd->size - bd->offset));
+  buf_size = std::min((size_t)buf_size, bd->size - bd->offset);
   if (!buf_size) return AVERROR_EOF;
 
   memcpy(buf, bd->data + bd->offset, buf_size);
@@ -101,7 +98,6 @@ bool FrameReader::load(const std::byte *data, size_t size, bool no_cuda, std::at
 
   width = (decoder_ctx->width + 3) & ~3;
   height = decoder_ctx->height;
-  visionbuf_compute_aligned_width_and_height(width, height, &aligned_width, &aligned_height);
 
   if (has_cuda_device && !no_cuda) {
     if (!initHardwareDecoder(AV_HWDEVICE_TYPE_CUDA)) {
@@ -222,21 +218,19 @@ bool FrameReader::copyBuffers(AVFrame *f, uint8_t *rgb, uint8_t *yuv) {
     libyuv::NV12ToI420(f->data[0], f->linesize[0], f->data[1], f->linesize[1],
                        y, width, u, width / 2, v, width / 2, width, height);
     libyuv::I420ToRGB24(y, width, u, width / 2, v, width / 2,
-                        rgb, aligned_width * 3, width, height);
+                        rgb, width * 3, width, height);
   } else {
     if (yuv) {
       uint8_t *u = yuv + width * height;
       uint8_t *v = u + (width / 2) * (height / 2);
-      libyuv::I420Copy(f->data[0], f->linesize[0],
-                       f->data[1], f->linesize[1],
-                       f->data[2], f->linesize[2],
-                       yuv, width, u, width / 2, v, width / 2,
-                       width, height);
+      memcpy(yuv, f->data[0], width * height);
+      memcpy(u, f->data[1], width / 2 * height / 2);
+      memcpy(v, f->data[2], width / 2 * height / 2);
     }
     libyuv::I420ToRGB24(f->data[0], f->linesize[0],
                         f->data[1], f->linesize[1],
                         f->data[2], f->linesize[2],
-                        rgb, aligned_width * 3, width, height);
+                        rgb, width * 3, width, height);
   }
   return true;
 }

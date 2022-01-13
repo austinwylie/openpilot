@@ -41,8 +41,8 @@ OnroadWindow::OnroadWindow(QWidget *parent) : QWidget(parent) {
   alerts->raise();
 
   setAttribute(Qt::WA_OpaquePaintEvent);
-  QObject::connect(uiState(), &UIState::uiUpdate, this, &OnroadWindow::updateState);
-  QObject::connect(uiState(), &UIState::offroadTransition, this, &OnroadWindow::offroadTransition);
+  QObject::connect(this, &OnroadWindow::updateStateSignal, this, &OnroadWindow::updateState);
+  QObject::connect(this, &OnroadWindow::offroadTransitionSignal, this, &OnroadWindow::offroadTransition);
 }
 
 void OnroadWindow::updateState(const UIState &s) {
@@ -51,8 +51,6 @@ void OnroadWindow::updateState(const UIState &s) {
   if (s.sm->updated("controlsState") || !alert.equal({})) {
     if (alert.type == "controlsUnresponsive") {
       bgColor = bg_colors[STATUS_ALERT];
-    } else if (alert.type == "controlsUnresponsivePermanent") {
-      bgColor = bg_colors[STATUS_DISENGAGED];
     }
     alerts->updateAlert(alert, bgColor);
   }
@@ -78,11 +76,10 @@ void OnroadWindow::mousePressEvent(QMouseEvent* e) {
 void OnroadWindow::offroadTransition(bool offroad) {
 #ifdef ENABLE_MAPS
   if (!offroad) {
-    if (map == nullptr && (uiState()->has_prime || !MAPBOX_TOKEN.isEmpty())) {
+    if (map == nullptr && (QUIState::ui_state.has_prime || !MAPBOX_TOKEN.isEmpty())) {
       MapWindow * m = new MapWindow(get_mapbox_settings());
       m->setFixedWidth(topWidget(this)->width() / 2);
-      m->offroadTransition(offroad);
-      QObject::connect(uiState(), &UIState::offroadTransition, m, &MapWindow::offroadTransition);
+      QObject::connect(this, &OnroadWindow::offroadTransitionSignal, m, &MapWindow::offroadTransition);
       split->addWidget(m, 0, Qt::AlignRight);
       map = m;
     }
@@ -165,8 +162,8 @@ void OnroadAlerts::paintEvent(QPaintEvent *event) {
 
 // OnroadHud
 OnroadHud::OnroadHud(QWidget *parent) : QWidget(parent) {
-  engage_img = loadPixmap("../assets/img_chffr_wheel.png", {img_size, img_size});
-  dm_img = loadPixmap("../assets/img_driver_face.png", {img_size, img_size});
+  engage_img = QPixmap("../assets/img_chffr_wheel.png").scaled(img_size, img_size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  dm_img = QPixmap("../assets/img_driver_face.png").scaled(img_size, img_size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 
   connect(this, &OnroadHud::valueChanged, [=] { update(); });
 }
@@ -175,6 +172,7 @@ void OnroadHud::updateState(const UIState &s) {
   const int SET_SPEED_NA = 255;
   const SubMaster &sm = *(s.sm);
   const auto cs = sm["controlsState"].getControlsState();
+  const auto carState = sm["carState"].getCarState();
 
   float maxspeed = cs.getVCruise();
   bool cruise_set = maxspeed > 0 && (int)maxspeed != SET_SPEED_NA;
@@ -182,7 +180,8 @@ void OnroadHud::updateState(const UIState &s) {
     maxspeed *= KM_TO_MILE;
   }
   QString maxspeed_str = cruise_set ? QString::number(std::nearbyint(maxspeed)) : "N/A";
-  float cur_speed = std::max(0.0, sm["carState"].getCarState().getVEgo() * (s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH));
+  float cur_speed = std::max(0.0, carState.getVEgo() * (s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH));
+  float cur_steeringTorque = std::abs((float)carState.getSteeringTorque())-1200;
 
   setProperty("is_cruise_set", cruise_set);
   setProperty("speed", QString::number(std::nearbyint(cur_speed)));
@@ -190,6 +189,12 @@ void OnroadHud::updateState(const UIState &s) {
   setProperty("speedUnit", s.scene.is_metric ? "km/h" : "mph");
   setProperty("hideDM", cs.getAlertSize() != cereal::ControlsState::AlertSize::NONE);
   setProperty("status", s.status);
+
+  setProperty("paused", cs.getPaused());
+  setProperty("enabled", cs.getEnabled());
+  setProperty("lkasEnabled", cs.getLkasEnabled());
+  setProperty("steeringPressed", carState.getSteeringPressed());
+  setProperty("steeringTorque", cur_steeringTorque);
 
   // update engageability and DM icons at 2Hz
   if (sm.frame % (UI_FREQ / 2) == 0) {
@@ -277,7 +282,7 @@ void NvgWindow::initializeGL() {
 void NvgWindow::updateFrameMat(int w, int h) {
   CameraViewWidget::updateFrameMat(w, h);
 
-  UIState *s = uiState();
+  UIState *s = &QUIState::ui_state;
   s->fb_w = w;
   s->fb_h = h;
   auto intrinsic_matrix = s->wide_camera ? ecam_intrinsic_matrix : fcam_intrinsic_matrix;
@@ -296,22 +301,52 @@ void NvgWindow::updateFrameMat(int w, int h) {
 }
 
 void NvgWindow::drawLaneLines(QPainter &painter, const UIScene &scene) {
-  if (!scene.end_to_end) {
-    // lanelines
-    for (int i = 0; i < std::size(scene.lane_line_vertices); ++i) {
-      painter.setBrush(QColor::fromRgbF(1.0, 1.0, 1.0, scene.lane_line_probs[i]));
-      painter.drawPolygon(scene.lane_line_vertices[i].v, scene.lane_line_vertices[i].cnt);
+  // lanelines
+  for (int i = 0; i < std::size(scene.lane_line_vertices); ++i) {
+    painter.setBrush(QColor::fromRgbF(1.0, 1.0, 1.0, scene.lane_line_probs[i]));
+    painter.drawPolygon(scene.lane_line_vertices[i].v, scene.lane_line_vertices[i].cnt);
+  }
+  // road edges
+  for (int i = 0; i < std::size(scene.road_edge_vertices); ++i) {
+    painter.setBrush(QColor::fromRgbF(1.0, 0, 0, std::clamp<float>(1.0 - scene.road_edge_stds[i], 0.0, 1.0)));
+    painter.drawPolygon(scene.road_edge_vertices[i].v, scene.road_edge_vertices[i].cnt);
+  }
+  
+  QColor beginColour;
+  QColor endColour;
+  bool steeringPressed = scene.car_state.getSteeringPressed();
+  if(steeringPressed)
+  {
+    float steeringTorque = std::abs((float)scene.car_state.getSteeringTorque())-1200;
+    beginColour = QColor(255, (int)(255 - std::clamp<float>((steeringTorque/2000),0.0,1.0)*255), 0);
+    endColour = QColor(255, (int)(255 - std::clamp<float>((steeringTorque/2000),0.0,1.0)*255), 0, 0);
+  }
+  else
+  {
+    if(scene.paused)
+    {
+      beginColour = QColor(255, 255, 255);
+      endColour = QColor(255, 255, 255, 0);
     }
-    // road edges
-    for (int i = 0; i < std::size(scene.road_edge_vertices); ++i) {
-      painter.setBrush(QColor::fromRgbF(1.0, 0, 0, std::clamp<float>(1.0 - scene.road_edge_stds[i], 0.0, 1.0)));
-      painter.drawPolygon(scene.road_edge_vertices[i].v, scene.road_edge_vertices[i].cnt);
+    else
+    {
+      if(scene.lkasEnabled && scene.enabled)
+      {
+        beginColour = QColor(0, 255, 0);
+        endColour = QColor(0, 255, 0, 0);
+      }
+      else
+      {
+        beginColour = QColor(255, 0, 0);
+        endColour = QColor(255, 0, 0, 0);
+      }
     }
   }
+
   // paint path
   QLinearGradient bg(0, height(), 0, height() / 4);
-  bg.setColorAt(0, scene.end_to_end ? redColor() : QColor(255, 255, 255));
-  bg.setColorAt(1, scene.end_to_end ? redColor(0) : QColor(255, 255, 255, 0));
+  bg.setColorAt(0, beginColour);
+  bg.setColorAt(1, endColour);
   painter.setBrush(bg);
   painter.drawPolygon(scene.track_vertices.v, scene.track_vertices.cnt);
 }
@@ -351,8 +386,8 @@ void NvgWindow::drawLead(QPainter &painter, const cereal::ModelDataV2::LeadDataV
 void NvgWindow::paintGL() {
   CameraViewWidget::paintGL();
 
-  UIState *s = uiState();
-  if (s->worldObjectsVisible()) {
+  UIState *s = &QUIState::ui_state;
+  if (s->scene.world_objects_visible) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(Qt::NoPen);
@@ -382,6 +417,6 @@ void NvgWindow::paintGL() {
 void NvgWindow::showEvent(QShowEvent *event) {
   CameraViewWidget::showEvent(event);
 
-  ui_update_params(uiState());
+  ui_update_params(&QUIState::ui_state);
   prev_draw_t = millis_since_boot();
 }

@@ -3,7 +3,6 @@ import json
 import os
 import time
 import subprocess
-from typing import NoReturn
 
 import requests
 from timezonefinder import TimezoneFinder
@@ -31,7 +30,7 @@ def set_timezone(valid_timezones, timezone):
     cloudlog.exception(f"Error setting timezone to {timezone}")
 
 
-def main() -> NoReturn:
+def main():
   params = Params()
   tf = TimezoneFinder()
 

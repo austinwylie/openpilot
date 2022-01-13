@@ -175,7 +175,7 @@ bool safety_setter_thread(std::vector<Panda *> pandas) {
 
     LOGW("panda %d: setting safety model: %d with param %d", i, (int)safety_model, safety_param);
 
-    panda->set_unsafe_mode(0);  // see safety_declarations.h for allowed values
+    panda->set_unsafe_mode(49);  // see safety_declarations.h for allowed values
     panda->set_safety_model(safety_model, safety_param);
   }
 
@@ -411,8 +411,6 @@ void panda_state_thread(PubMaster *pm, std::vector<Panda *> pandas, bool spoofin
   util::set_thread_name("boardd_panda_state");
 
   Params params;
-  SubMaster sm({"controlsState"});
-
   Panda *peripheral_panda = pandas[0];
   bool ignition_last = false;
   std::future<bool> safety_future;
@@ -447,11 +445,8 @@ void panda_state_thread(PubMaster *pm, std::vector<Panda *> pandas, bool spoofin
 
     ignition_last = ignition;
 
-    sm.update(0);
-    const bool engaged = sm.allAliveAndValid({"controlsState"}) && sm["controlsState"].getControlsState().getEnabled();
-
     for (const auto &panda : pandas) {
-      panda->send_heartbeat(engaged);
+      panda->send_heartbeat();
     }
     util::sleep_for(500);
   }
@@ -657,8 +652,6 @@ int main(int argc, char *argv[]) {
     LOGW("connected to board");
     Panda *peripheral_panda = pandas[0];
     std::vector<std::thread> threads;
-
-    Params().put("LastPeripheralPandaType", std::to_string((int) peripheral_panda->get_hw_type()));
 
     threads.emplace_back(panda_state_thread, &pm, pandas, getenv("STARTED") != nullptr);
     threads.emplace_back(peripheral_control_thread, peripheral_panda);

@@ -41,5 +41,5 @@ if __name__ == "__main__":
     sys.exit(1)
 
   route = Route(sys.argv[1])
-  lr = MultiLogIterator(route.log_paths()[:5])
+  lr = MultiLogIterator(route.log_paths()[:5], wraparound=False)
   get_fingerprint(lr)

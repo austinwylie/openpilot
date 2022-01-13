@@ -2,14 +2,12 @@ import random
 import threading
 import time
 from statistics import mean
-from typing import Optional
 
 from cereal import log
 from common.params import Params, put_nonblocking
 from common.realtime import sec_since_boot
 from selfdrive.hardware import HARDWARE
 from selfdrive.swaglog import cloudlog
-from selfdrive.statsd import statlog
 
 CAR_VOLTAGE_LOW_PASS_K = 0.091 # LPF gain for 5s tau (dt/tau / (dt/tau + 1))
 
@@ -20,7 +18,7 @@ CAR_CHARGING_RATE_W = 45
 
 VBATT_PAUSE_CHARGING = 11.0           # Lower limit on the LPF car battery voltage
 VBATT_INSTANT_PAUSE_CHARGING = 7.0    # Lower limit on the instant car battery voltage measurements to avoid triggering on instant power loss
-MAX_TIME_OFFROAD_S = 30*3600
+MAX_TIME_OFFROAD_S = 3*3600
 MIN_ON_TIME_S = 3600
 
 class PowerMonitoring:
@@ -57,7 +55,6 @@ class PowerMonitoring:
       # Low-pass battery voltage
       self.car_voltage_instant_mV = peripheralState.voltage
       self.car_voltage_mV = ((peripheralState.voltage * CAR_VOLTAGE_LOW_PASS_K) + (self.car_voltage_mV * (1 - CAR_VOLTAGE_LOW_PASS_K)))
-      statlog.gauge("car_voltage", self.car_voltage_mV / 1e3)
 
       # Cap the car battery power and save it in a param every 10-ish seconds
       self.car_battery_capacity_uWh = max(self.car_battery_capacity_uWh, 0)
@@ -138,7 +135,7 @@ class PowerMonitoring:
     except Exception:
       cloudlog.exception("Power monitoring calculation failed")
 
-  def _perform_integration(self, t: float, current_power: float) -> None:
+  def _perform_integration(self, t, current_power):
     with self.integration_lock:
       try:
         if self.last_measurement_time:
@@ -153,14 +150,14 @@ class PowerMonitoring:
         cloudlog.exception("Integration failed")
 
   # Get the power usage
-  def get_power_used(self) -> int:
+  def get_power_used(self):
     return int(self.power_used_uWh)
 
-  def get_car_battery_capacity(self) -> int:
+  def get_car_battery_capacity(self):
     return int(self.car_battery_capacity_uWh)
 
   # See if we need to disable charging
-  def should_disable_charging(self, ignition: bool, in_car: bool, offroad_timestamp: Optional[float]) -> bool:
+  def should_disable_charging(self, ignition, in_car, offroad_timestamp):
     if offroad_timestamp is None:
       return False
 
